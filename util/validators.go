@@ -2,6 +2,7 @@ package util
 
 import (
 	"api/models"
+	"context"
 	"regexp"
 
 	valid "github.com/asaskevich/govalidator"
@@ -17,7 +18,10 @@ func IsEmpty(str string) (bool, string) {
 }
 
 // ValidateRegister func validates the body of user for registration
-func ValidateRegister(u *models.User) *models.UserErrors {
+func ValidateRegister(ctx context.Context, u *models.User) *models.UserErrors {
+	ctx, span := tracer.Start(ctx, "ValidateRegistration")
+	defer span.End()
+
 	e := &models.UserErrors{}
 	e.Err, e.Msg = IsEmpty(u.Username)
 

@@ -3,25 +3,32 @@ package util
 import (
 	db "api/database"
 	"api/models"
+	"context"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v4"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
+
 var jwtKey = []byte(db.PRIVKEY)
+var tracer = otel.Tracer("utils")
 
 // GenerateTokens generates the access and refresh tokens
-func GenerateTokens(uuid string) (string, string) {
-	claim, accessToken := GenerateAccessClaims(uuid)
-	refreshToken := GenerateRefreshClaims(claim)
-
+func GenerateTokens(ctx context.Context, uuid string) (string, string) {
+	ctx, span := tracer.Start(ctx, "GenerateTokens")
+	accessToken, refreshToken := GenerateAccessClaims(ctx, uuid)
+	span.AddEvent("Tokens are Generated.")
+	time.Sleep(3 * time.Second)
+	span.End()
 	return accessToken, refreshToken
 }
 
 // GenerateAccessClaims returns a claim and a acess_token string
-func GenerateAccessClaims(uuid string) (*models.Claims, string) {
-
+func GenerateAccessClaims(ctx context.Context, uuid string) (string, string) {
+	ctx, span := tracer.Start(ctx, "AccessClaims")
 	t := time.Now()
 	claim := &models.Claims{
 		StandardClaims: jwt.StandardClaims{
@@ -38,12 +45,22 @@ func GenerateAccessClaims(uuid string) (*models.Claims, string) {
 		panic(err)
 	}
 
-	return claim, tokenString
+	span.SetAttributes(
+		attribute.String("app.tokenString", tokenString),
+	)
+	span.AddEvent("Access claim is generated.")
+
+	// Getting Refresh Token
+	refreshToken := GenerateRefreshClaims(ctx, claim)
+	span.End()
+	return tokenString, refreshToken
 }
 
 // GenerateRefreshClaims returns refresh_token
-func GenerateRefreshClaims(cl *models.Claims) string {
-	result := db.DB.Where(&models.Claims{
+func GenerateRefreshClaims(ctx context.Context, cl *models.Claims) string {
+	_, span := tracer.Start(ctx, "RefreshClaims")
+	dbCtx := db.DB.WithContext(ctx)
+	result := dbCtx.Where(&models.Claims{
 		StandardClaims: jwt.StandardClaims{
 			Issuer: cl.Issuer,
 		},
@@ -52,7 +69,7 @@ func GenerateRefreshClaims(cl *models.Claims) string {
 	// checking the number of refresh tokens stored.
 	// If the number is higher than 3, remove all the refresh tokens and leave only new one.
 	if result.RowsAffected > 3 {
-		db.DB.Where(&models.Claims{StandardClaims: jwt.StandardClaims{Issuer: cl.Issuer}}).Delete(&models.Claims{})
+		dbCtx.Where(&models.Claims{StandardClaims: jwt.StandardClaims{Issuer: cl.Issuer}}).Delete(&models.Claims{})
 	}
 
 	t := time.Now()
@@ -66,14 +83,15 @@ func GenerateRefreshClaims(cl *models.Claims) string {
 	}
 
 	// create a claim on DB
-	db.DB.Create(&refreshClaim)
+	dbCtx.Create(&refreshClaim)
 
 	refreshToken := jwt.NewWithClaims(jwt.SigningMethodHS256, refreshClaim)
 	refreshTokenString, err := refreshToken.SignedString(jwtKey)
 	if err != nil {
 		panic(err)
 	}
-
+	span.AddEvent("Refres claim is generated.")
+	span.End()
 	return refreshTokenString
 }
 
